@@ -89,7 +89,7 @@ class RoEnKeyboardService : InputMethodService(), KeyboardView.OnKeyboardActionL
             10 -> handleWordBoundary(ic, "\n", sendEnterAction = true)
             32 -> handleWordBoundary(ic, " ")
             44, 46, 33, 63, 58, 59 -> handleWordBoundary(ic, primaryCode.toChar().toString())
-            else -> handleLetter(ic, primaryCode)
+            else -> handleSoftKeyLetter(ic, primaryCode)
         }
     }
 
@@ -103,7 +103,8 @@ class RoEnKeyboardService : InputMethodService(), KeyboardView.OnKeyboardActionL
 
     // ---- input handling ----
 
-    private fun handleLetter(ic: android.view.inputmethod.InputConnection, codePoint: Int) {
+    /** Called from the on-screen keyboard: [codePoint] is always lower-case, cased here using our own shift/caps-lock state. */
+    private fun handleSoftKeyLetter(ic: android.view.inputmethod.InputConnection, codePoint: Int) {
         var ch = codePoint.toChar()
         if (shiftOn || capsLock) {
             ch = ch.uppercaseChar()
@@ -112,6 +113,11 @@ class RoEnKeyboardService : InputMethodService(), KeyboardView.OnKeyboardActionL
                 updateShiftState()
             }
         }
+        handleLetter(ic, ch)
+    }
+
+    /** Appends an already-cased letter (from either the soft keyboard or a hardware key press) to the current word. */
+    private fun handleLetter(ic: android.view.inputmethod.InputConnection, ch: Char) {
         currentWord.append(ch)
         ic.setComposingText(currentWord, 1)
         updateCandidates(dictionary.suggest(currentWord.toString()))
@@ -203,6 +209,7 @@ class RoEnKeyboardService : InputMethodService(), KeyboardView.OnKeyboardActionL
 
     private fun updateCandidates(suggestions: List<Suggestion>) {
         currentSuggestions = suggestions
+        if (!::candidate0.isInitialized) return // no on-screen view yet (e.g. typing on the physical keyboard)
         val views = arrayOf(candidate0, candidate1, candidate2)
         for (i in views.indices) {
             views[i].text = suggestions.getOrNull(i)?.let { matchCase(currentWord.toString(), it.word) } ?: ""
@@ -221,7 +228,7 @@ class RoEnKeyboardService : InputMethodService(), KeyboardView.OnKeyboardActionL
         if (ic != null && event != null && event.isPrintingKey && keyCode != KeyEvent.KEYCODE_SPACE) {
             val unicodeChar = event.unicodeChar
             if (unicodeChar != 0 && Character.isLetter(unicodeChar)) {
-                handleLetter(ic, Character.toLowerCase(unicodeChar))
+                handleLetter(ic, unicodeChar.toChar())
                 return true
             }
         }

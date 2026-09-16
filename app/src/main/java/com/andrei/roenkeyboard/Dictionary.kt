@@ -137,8 +137,10 @@ class Dictionary private constructor() {
             fuzzyCandidates(lower, roByFirst, ro, Lang.RO, maxDist, ROMANIAN_BIAS, results)
         }
 
+        // Edit distance dominates the ranking (a closer typo match beats a merely more common
+        // word), frequency only breaks ties within the same distance.
         return results.values
-            .sortedByDescending { it.score }
+            .sortedWith(compareBy<Suggestion> { it.distance }.thenByDescending { it.score })
             .take(maxResults)
     }
 
@@ -172,30 +174,38 @@ class Dictionary private constructor() {
         }
     }
 
-    /** Levenshtein distance with early exit once it's certain the result exceeds [maxDist]. */
+    /**
+     * Damerau-Levenshtein distance (optimal string alignment variant): like Levenshtein but
+     * treats an adjacent-letter swap (e.g. "wrold" -> "world") as a single edit instead of two
+     * substitutions. Swapped letters are one of the most common typo patterns, so without this a
+     * frequent-but-unrelated word can outscore the correct one purely on word frequency.
+     */
     private fun boundedEditDistance(a: String, b: String, maxDist: Int): Int {
         val la = a.length
         val lb = b.length
         if (kotlin.math.abs(la - lb) > maxDist) return maxDist + 1
-        var prev = IntArray(lb + 1) { it }
-        var curr = IntArray(lb + 1)
+
+        val d = Array(la + 1) { IntArray(lb + 1) }
+        for (i in 0..la) d[i][0] = i
+        for (j in 0..lb) d[0][j] = j
+
         for (i in 1..la) {
-            curr[0] = i
-            var rowMin = curr[0]
+            var rowMin = Int.MAX_VALUE
             for (j in 1..lb) {
                 val cost = if (a[i - 1] == b[j - 1]) 0 else 1
-                curr[j] = minOf(
-                    prev[j] + 1,
-                    curr[j - 1] + 1,
-                    prev[j - 1] + cost
+                var v = minOf(
+                    d[i - 1][j] + 1,
+                    d[i][j - 1] + 1,
+                    d[i - 1][j - 1] + cost
                 )
-                if (curr[j] < rowMin) rowMin = curr[j]
+                if (i > 1 && j > 1 && a[i - 1] == b[j - 2] && a[i - 2] == b[j - 1]) {
+                    v = minOf(v, d[i - 2][j - 2] + 1)
+                }
+                d[i][j] = v
+                if (v < rowMin) rowMin = v
             }
             if (rowMin > maxDist) return maxDist + 1
-            val tmp = prev
-            prev = curr
-            curr = tmp
         }
-        return prev[lb]
+        return d[la][lb]
     }
 }
