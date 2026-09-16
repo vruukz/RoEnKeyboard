@@ -66,9 +66,13 @@ class Dictionary private constructor() {
     private fun load(context: Context) {
         loadFile(context, "dict/en.txt", en, enByFirst)
         loadFile(context, "dict/ro.txt", ro, roByFirst)
+        // Map every "folded" (diacritics stripped) shape to the single most frequent RO word with
+        // that shape - including undiacritized words themselves. This is needed because the source
+        // corpus (subtitles) contains a lot of undiacritized spellings as their own dictionary
+        // entries (e.g. "si" 1.08M vs "și" 4.66M) - without this, an undiacritized typed word would
+        // exact-match its own undiacritized entry and never get corrected to the proper accented one.
         for ((word, freq) in ro) {
             val folded = foldDiacritics(word)
-            if (folded == word) continue // no diacritics, nothing to fold
             val current = roFoldToBest[folded]
             if (current == null || (ro[current] ?: 0) < freq) {
                 roFoldToBest[folded] = word
@@ -111,23 +115,22 @@ class Dictionary private constructor() {
         val lower = rawWord.lowercase()
         val results = LinkedHashMap<String, Suggestion>()
 
-        // 1) Exact match in either dictionary: already correct, still offer as top candidate.
+        // 1) Exact match in English: already correct, still offer as top candidate.
         en[lower]?.let { results[lower] = Suggestion(lower, it.toDouble(), Lang.EN, 0) }
-        ro[lower]?.let { f ->
-            val cur = results[lower]
-            if (cur == null || f * ROMANIAN_BIAS > cur.score) {
-                results[lower] = Suggestion(lower, f * ROMANIAN_BIAS, Lang.RO, 0)
-            }
-        }
 
-        // 2) Diacritic restoration: "masina" -> "mașină" etc.
+        // 2) Romanian: resolve to the single most frequent word sharing this diacritic-folded
+        // shape (this doubles as both "exact match" and "diacritic restoration" - see load()).
+        // "masina" -> "mașină", and critically "si" -> "și" even though "si" also appears in the
+        // dictionary, because "și" is far more frequent than the undiacritized form. This is
+        // scored as distance 0 (not 1) even when diacritics were added/changed: a missing
+        // diacritic isn't a typo the way a swapped letter is, so it shouldn't be outranked by an
+        // unrelated same-distance word (e.g. English "si") just because that one was typed
+        // verbatim - frequency (with the RO bias) is what should decide it.
         val folded = foldDiacritics(lower)
         roFoldToBest[folded]?.let { word ->
-            if (word != lower) {
-                val f = (ro[word] ?: 0).toDouble() * ROMANIAN_BIAS
-                val cur = results[word]
-                if (cur == null || f > cur.score) results[word] = Suggestion(word, f, Lang.RO, 1)
-            }
+            val f = (ro[word] ?: 0).toDouble() * ROMANIAN_BIAS
+            val cur = results[word]
+            if (cur == null || f > cur.score) results[word] = Suggestion(word, f, Lang.RO, 0)
         }
 
         // 3) Fuzzy edit-distance search (only if we don't already have a confident exact hit).
@@ -162,6 +165,10 @@ class Dictionary private constructor() {
         }
         for (cand in candidates) {
             if (kotlin.math.abs(cand.length - word.length) > maxDist) continue
+            // Skip RO words that are just an undiacritized duplicate of a more frequent accented
+            // word (e.g. "buna" when "bună" exists) - otherwise this exact self-match would win on
+            // distance alone and undo the diacritic restoration done above in suggest().
+            if (lang == Lang.RO && roFoldToBest[foldDiacritics(cand)] != cand) continue
             val dist = boundedEditDistance(word, cand, maxDist)
             if (dist in 0..maxDist) {
                 val freq = freqMap[cand] ?: continue

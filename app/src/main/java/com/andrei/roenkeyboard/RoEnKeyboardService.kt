@@ -252,10 +252,19 @@ class RoEnKeyboardService : InputMethodService(), KeyboardView.OnKeyboardActionL
         // Route physical/hardware keyboard presses (e.g. on devices like the Titan Slim)
         // through the same autocorrect pipeline as the on-screen keys.
         val ic = currentInputConnection
-        if (ic != null && event != null && event.isPrintingKey && keyCode != KeyEvent.KEYCODE_SPACE) {
+        if (ic != null && event != null && event.isPrintingKey &&
+            keyCode != KeyEvent.KEYCODE_SPACE && keyCode != KeyEvent.KEYCODE_ENTER
+        ) {
             val unicodeChar = event.unicodeChar
             if (unicodeChar != 0 && Character.isLetter(unicodeChar)) {
                 handleLetter(ic, unicodeChar.toChar())
+                return true
+            }
+            if (unicodeChar != 0) {
+                // Any other printable character (. , ! ? ' - etc.) finishes the current word first,
+                // exactly like tapping punctuation on the on-screen keyboard does - otherwise these
+                // were silently dropped and the word behind them never got autocorrected.
+                handleWordBoundary(ic, unicodeChar.toChar().toString())
                 return true
             }
         }
