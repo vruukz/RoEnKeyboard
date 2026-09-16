@@ -31,6 +31,17 @@ class RoEnKeyboardService : InputMethodService(), KeyboardView.OnKeyboardActionL
     private var shiftOn = false
     private var currentSuggestions: List<Suggestion> = emptyList()
 
+    // Support for Romanian hyphenated contractions (v-am, s-a, mi-a, dintr-un, ...): the word just
+    // committed - both as originally typed (lastCommittedRaw, used to test "raw-nextWord" against
+    // the dictionary, since the typed prefix itself, not its own autocorrection, is what forms the
+    // contraction) and as it actually appears in the text now (lastCommittedText, so a merge can
+    // delete exactly that much back) - plus, when the user typed the hyphen directly, the prefix
+    // before it (so "v-am" resolves as one unit instead of autocorrecting "v" in isolation, which
+    // would just mangle it).
+    private var lastCommittedRaw: String? = null
+    private var lastCommittedText: String? = null
+    private var pendingHyphenPrefix: String? = null
+
     override fun onCreate() {
         super.onCreate()
         dictionary = Dictionary.get(applicationContext)
@@ -68,6 +79,9 @@ class RoEnKeyboardService : InputMethodService(), KeyboardView.OnKeyboardActionL
         currentWord.clear()
         capsLock = false
         shiftOn = false
+        lastCommittedRaw = null
+        lastCommittedText = null
+        pendingHyphenPrefix = null
         keyboardView.keyboard = qwertyKeyboard
         keyboardView.visibility = View.GONE // start each input session with only the suggestions bar visible
         updateShiftState()
@@ -146,15 +160,66 @@ class RoEnKeyboardService : InputMethodService(), KeyboardView.OnKeyboardActionL
                 updateCandidates(dictionary.suggest(currentWord.toString()))
             }
         } else {
+            // Deleting back across a word/hyphen boundary invalidates that tracked context.
+            pendingHyphenPrefix = null
+            lastCommittedRaw = null
+            lastCommittedText = null
             ic.deleteSurroundingText(1, 0)
         }
     }
 
     private fun handleWordBoundary(ic: android.view.inputmethod.InputConnection, boundary: String, sendEnterAction: Boolean = false) {
-        if (currentWord.isNotEmpty()) {
-            val best = bestAutocorrection(currentWord.toString())
-            ic.setComposingText(best, 1)
+        val typedWord = currentWord.toString()
+
+        if (boundary == "-") {
+            // Likely the start of a contraction (v-am, s-a, dintr-un, ...): don't autocorrect the
+            // prefix in isolation - "v", "s", "mi", "dintr" etc aren't real words on their own and
+            // would just get mangled - commit it as typed and resolve the whole thing once the
+            // suffix after the hyphen arrives.
+            if (typedWord.isNotEmpty()) {
+                ic.finishComposingText()
+                pendingHyphenPrefix = typedWord
+            }
+            currentWord.clear()
+            updateCandidates(emptyList())
+            ic.commitText(boundary, 1)
+            return
+        }
+
+        val prefix = pendingHyphenPrefix
+        if (typedWord.isNotEmpty() && prefix != null) {
+            // Finishing a contraction typed with an explicit hyphen: "prefix-typedWord".
+            val exact = dictionary.exactRoMatch("$prefix-$typedWord")
+            val resolved = exact ?: "$prefix-${bestAutocorrection(typedWord)}"
+            val cased = matchCase(prefix, resolved)
+            ic.deleteSurroundingText(prefix.length + 1, 0) // remove the already-committed "prefix-"
+            ic.setComposingText(cased, 1)
             ic.finishComposingText()
+            lastCommittedRaw = "$prefix-$typedWord".lowercase()
+            lastCommittedText = cased
+            pendingHyphenPrefix = null
+        } else if (typedWord.isNotEmpty()) {
+            // Normal word boundary, but first check whether merging with the word just committed
+            // forms a known contraction typed as two separate words ("v" <space> "am" -> "v-am").
+            // This checks the *raw* typed previous word, not its own autocorrection (e.g. "v" was
+            // likely auto-corrected to "va" on its own, but "v-am" - not "va-am" - is the real word).
+            val prevRaw = lastCommittedRaw
+            val prevText = lastCommittedText
+            val merged = if (boundary == " " && prevRaw != null) dictionary.exactRoMatch("$prevRaw-$typedWord") else null
+            if (merged != null && prevText != null) {
+                val cased = matchCase(prevRaw!!, merged)
+                ic.deleteSurroundingText(prevText.length + 1, 0) // remove the previously committed word + the space before this one
+                ic.setComposingText(cased, 1)
+                ic.finishComposingText()
+                lastCommittedRaw = merged.lowercase()
+                lastCommittedText = cased
+            } else {
+                val best = bestAutocorrection(typedWord)
+                ic.setComposingText(best, 1)
+                ic.finishComposingText()
+                lastCommittedRaw = typedWord.lowercase()
+                lastCommittedText = best
+            }
         }
         currentWord.clear()
         updateCandidates(emptyList())
@@ -172,6 +237,10 @@ class RoEnKeyboardService : InputMethodService(), KeyboardView.OnKeyboardActionL
             if (!handled) ic.commitText(boundary, 1)
         } else {
             ic.commitText(boundary, 1)
+        }
+        if (boundary != " ") { // contractions only merge across a plain space
+            lastCommittedRaw = null
+            lastCommittedText = null
         }
     }
 

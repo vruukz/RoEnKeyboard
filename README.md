@@ -15,6 +15,11 @@ against **both** dictionaries at once — there's no language toggle to get wron
 3. **Fuzzy correction** — otherwise the closest word (edit distance ≤ 2) from
    either dictionary is substituted, ranked by real-world word frequency
    (from the [OpenSubtitles-derived FrequencyWords corpus](https://github.com/hermitdave/FrequencyWords)).
+4. **Hyphenated contractions** — common Romanian clitic contractions (`v-am`,
+   `n-am`, `s-a`, `mi-a`, `dintr-un`, ...) are recognized and restored whether
+   typed as one fused word (`vam` → `v-am`), as two separate words (`v am` →
+   `v-am`), or with the hyphen typed directly (typos in the part after the
+   hyphen still get corrected, e.g. `v-ma` → `v-am`).
 
 Romanian candidates get a small scoring bias, so on a genuine tie between an
 English and a Romanian correction, Romanian wins (per explicit preference —

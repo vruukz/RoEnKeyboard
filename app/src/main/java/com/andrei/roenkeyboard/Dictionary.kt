@@ -105,6 +105,14 @@ class Dictionary private constructor() {
         return en.containsKey(lw) || ro.containsKey(lw)
     }
 
+    /** Exact (case-insensitive) RO dictionary lookup, used for hyphenated-contraction handling
+     * (e.g. checking whether "v" + "-" + "am" is the known word "v-am"). Returns the canonical
+     * lower-case dictionary form, or null if [word] isn't a RO dictionary entry. */
+    fun exactRoMatch(word: String): String? {
+        val lw = word.lowercase()
+        return if (ro.containsKey(lw)) lw else null
+    }
+
     /**
      * Returns ranked correction candidates for [rawWord] (which does not need to
      * be lower-cased). Combines exact matches, diacritic-fold matches and
@@ -133,12 +141,17 @@ class Dictionary private constructor() {
             if (cur == null || f > cur.score) results[word] = Suggestion(word, f, Lang.RO, 0)
         }
 
-        // 3) Fuzzy edit-distance search (only if we don't already have a confident exact hit).
+        // 3) Fuzzy edit-distance search.
+        val maxDist = if (lower.length <= 4) 1 else 2
+        // EN: only bother if we don't already have a confident exact hit, to avoid noisy typo
+        // suggestions replacing an already-valid word.
         if (results.isEmpty() || results.values.none { it.distance == 0 }) {
-            val maxDist = if (lower.length <= 4) 1 else 2
             fuzzyCandidates(lower, enByFirst, en, Lang.EN, maxDist, 1.0, results)
-            fuzzyCandidates(lower, roByFirst, ro, Lang.RO, maxDist, ROMANIAN_BIAS, results)
         }
+        // RO: always run, even if there's already an exact EN match - a RO diacritic/hyphen
+        // restoration (e.g. "nam" is also a rare real English word, but "n-am" is almost
+        // certainly what a Romanian speaker meant) must get the chance to outscore it.
+        fuzzyCandidates(lower, roByFirst, ro, Lang.RO, maxDist, ROMANIAN_BIAS, results)
 
         // Edit distance dominates the ranking (a closer typo match beats a merely more common
         // word), frequency only breaks ties within the same distance.
@@ -169,7 +182,12 @@ class Dictionary private constructor() {
             // word (e.g. "buna" when "bună" exists) - otherwise this exact self-match would win on
             // distance alone and undo the diacritic restoration done above in suggest().
             if (lang == Lang.RO && roFoldToBest[foldDiacritics(cand)] != cand) continue
-            val dist = boundedEditDistance(word, cand, maxDist)
+            // A RO dictionary word that's just the typed word with a hyphen inserted (e.g. typing
+            // "vam" for the contraction "v-am") is scored as distance 0, the same as a missing
+            // diacritic: it's not really a "typo" in the sense a swapped/wrong letter is, so a
+            // rival word shouldn't win purely because it happens to be more common.
+            val missingHyphen = lang == Lang.RO && cand.contains('-') && cand.replace("-", "") == word
+            val dist = if (missingHyphen) 0 else boundedEditDistance(word, cand, maxDist)
             if (dist in 0..maxDist) {
                 val freq = freqMap[cand] ?: continue
                 val score = freq.toDouble() * bias / (1.0 + dist * 3.0)
