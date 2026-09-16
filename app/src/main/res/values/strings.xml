@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">RoEn Keyboard</string>
+    <string name="main_title">RoEn Keyboard</string>
+    <string name="main_desc">Bilingual (Romanian + English) keyboard with automatic autocorrect. No manual language switch needed — it corrects each word against both dictionaries at once.</string>
+    <string name="enable_button">1. Enable in system settings</string>
+    <string name="choose_button">2. Set as active keyboard</string>
+    <string name="status_enabled">Keyboard is enabled ✓</string>
+    <string name="status_disabled">Keyboard is not enabled yet</string>
+</resources>

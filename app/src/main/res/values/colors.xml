@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="key_bg">#3A3F44</color>
+    <color name="key_bg_pressed">#565C63</color>
+    <color name="key_bg_special">#2C2F33</color>
+    <color name="key_text">#F2F2F2</color>
+    <color name="keyboard_bg">#202225</color>
+    <color name="candidate_bg">#26292D</color>
+    <color name="candidate_text">#E8E8E8</color>
+    <color name="candidate_text_best">#7EC8E3</color>
+    <color name="accent">#4C8BF5</color>
+</resources>
