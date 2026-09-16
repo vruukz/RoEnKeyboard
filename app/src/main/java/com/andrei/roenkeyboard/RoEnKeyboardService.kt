@@ -49,13 +49,19 @@ class RoEnKeyboardService : InputMethodService(), KeyboardView.OnKeyboardActionL
         keyboardView.keyboard = qwertyKeyboard
         keyboardView.setOnKeyboardActionListener(this)
         keyboardView.isPreviewEnabled = true
+        keyboardView.visibility = View.GONE // hidden by default; toggled via the candidates bar button
 
         candidate0.setOnClickListener { applySuggestionAt(0) }
         candidate1.setOnClickListener { applySuggestionAt(1) }
         candidate2.setOnClickListener { applySuggestionAt(2) }
+        root.findViewById<View>(R.id.btnToggleKeyboard).setOnClickListener { toggleKeyboardVisibility() }
 
         return root
     }
+
+    /** Always create/show the input view (so the suggestions bar exists) even though the device
+     *  would otherwise auto-hide it while a physical keyboard is attached (e.g. the Titan Slim). */
+    override fun onEvaluateInputViewShown(): Boolean = true
 
     override fun onStartInputView(info: EditorInfo?, restarting: Boolean) {
         super.onStartInputView(info, restarting)
@@ -63,8 +69,13 @@ class RoEnKeyboardService : InputMethodService(), KeyboardView.OnKeyboardActionL
         capsLock = false
         shiftOn = false
         keyboardView.keyboard = qwertyKeyboard
+        keyboardView.visibility = View.GONE // start each input session with only the suggestions bar visible
         updateShiftState()
         updateCandidates(emptyList())
+    }
+
+    private fun toggleKeyboardVisibility() {
+        keyboardView.visibility = if (keyboardView.visibility == View.VISIBLE) View.GONE else View.VISIBLE
     }
 
     override fun onFinishInputView(finishingInput: Boolean) {
@@ -196,10 +207,16 @@ class RoEnKeyboardService : InputMethodService(), KeyboardView.OnKeyboardActionL
         } else corrected
     }
 
-    private fun applySuggestionAt(index: Int) {
-        if (index >= currentSuggestions.size) return
+    // Maps each visible slot (0=left, 1=center/bold, 2=right) to the index into currentSuggestions
+    // it's currently showing, or -1 if the slot is empty. The center slot always shows the actual
+    // top-ranked suggestion (the one bestAutocorrection() will auto-apply on a word boundary).
+    private var slotToSuggestion = intArrayOf(-1, -1, -1)
+
+    private fun applySuggestionAt(slot: Int) {
+        val suggestionIndex = slotToSuggestion.getOrElse(slot) { -1 }
+        if (suggestionIndex < 0 || suggestionIndex >= currentSuggestions.size) return
         val ic = currentInputConnection ?: return
-        val chosen = matchCase(currentWord.toString(), currentSuggestions[index].word)
+        val chosen = matchCase(currentWord.toString(), currentSuggestions[suggestionIndex].word)
         ic.setComposingText(chosen, 1)
         ic.finishComposingText()
         ic.commitText(" ", 1)
@@ -209,10 +226,20 @@ class RoEnKeyboardService : InputMethodService(), KeyboardView.OnKeyboardActionL
 
     private fun updateCandidates(suggestions: List<Suggestion>) {
         currentSuggestions = suggestions
+        // Suggestions are already ranked best-first; display the top one in the bold center slot
+        // and the runners-up on either side, so the highlighted word is always the one that gets
+        // auto-applied on space/punctuation.
+        slotToSuggestion = when (suggestions.size) {
+            0 -> intArrayOf(-1, -1, -1)
+            1 -> intArrayOf(-1, 0, -1)
+            2 -> intArrayOf(1, 0, -1)
+            else -> intArrayOf(1, 0, 2)
+        }
         if (!::candidate0.isInitialized) return // no on-screen view yet (e.g. typing on the physical keyboard)
         val views = arrayOf(candidate0, candidate1, candidate2)
-        for (i in views.indices) {
-            views[i].text = suggestions.getOrNull(i)?.let { matchCase(currentWord.toString(), it.word) } ?: ""
+        for (slot in views.indices) {
+            val suggestionIndex = slotToSuggestion[slot]
+            views[slot].text = if (suggestionIndex >= 0) matchCase(currentWord.toString(), suggestions[suggestionIndex].word) else ""
         }
     }
 

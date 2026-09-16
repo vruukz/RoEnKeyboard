@@ -5,56 +5,7 @@
     android:orientation="vertical"
     android:background="@color/keyboard_bg">
 
-    <LinearLayout
-        android:id="@+id/candidateBar"
-        android:layout_width="match_parent"
-        android:layout_height="@dimen/candidate_bar_height"
-        android:orientation="horizontal"
-        android:background="@color/candidate_bg"
-        android:weightSum="3">
-
-        <TextView
-            android:id="@+id/candidate0"
-            android:layout_width="0dp"
-            android:layout_height="match_parent"
-            android:layout_weight="1"
-            android:gravity="center"
-            android:textColor="@color/candidate_text"
-            android:textSize="15sp"
-            android:singleLine="true"
-            android:ellipsize="end"
-            android:padding="4dp" />
-
-        <View android:layout_width="1dp" android:layout_height="match_parent" android:background="#3A3F44" />
-
-        <TextView
-            android:id="@+id/candidate1"
-            android:layout_width="0dp"
-            android:layout_height="match_parent"
-            android:layout_weight="1"
-            android:gravity="center"
-            android:textColor="@color/candidate_text_best"
-            android:textSize="16sp"
-            android:textStyle="bold"
-            android:singleLine="true"
-            android:ellipsize="end"
-            android:padding="4dp" />
-
-        <View android:layout_width="1dp" android:layout_height="match_parent" android:background="#3A3F44" />
-
-        <TextView
-            android:id="@+id/candidate2"
-            android:layout_width="0dp"
-            android:layout_height="match_parent"
-            android:layout_weight="1"
-            android:gravity="center"
-            android:textColor="@color/candidate_text"
-            android:textSize="15sp"
-            android:singleLine="true"
-            android:ellipsize="end"
-            android:padding="4dp" />
-
-    </LinearLayout>
+    <include layout="@layout/candidates_bar" />
 
     <android.inputmethodservice.KeyboardView
         android:id="@+id/keyboardView"
