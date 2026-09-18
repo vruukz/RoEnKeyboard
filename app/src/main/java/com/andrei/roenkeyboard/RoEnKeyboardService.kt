@@ -40,7 +40,12 @@ class RoEnKeyboardService : InputMethodService(), KeyboardView.OnKeyboardActionL
     // would just mangle it).
     private var lastCommittedRaw: String? = null
     private var lastCommittedText: String? = null
-    private var pendingHyphenPrefix: String? = null
+    private var pendingJoinerPrefix: String? = null
+    private var pendingJoinerChar: String? = null
+
+    // Set when the keyboard itself upper-cased the first letter of the word being typed (sentence
+    // start), as opposed to the user pressing shift - autocorrect treats the two differently.
+    private var currentWordAutoCapitalized = false
 
     override fun onCreate() {
         super.onCreate()
@@ -81,7 +86,10 @@ class RoEnKeyboardService : InputMethodService(), KeyboardView.OnKeyboardActionL
         shiftOn = false
         lastCommittedRaw = null
         lastCommittedText = null
-        pendingHyphenPrefix = null
+        pendingJoinerPrefix = null
+        pendingJoinerChar = null
+        stickyAlt = Sticky.OFF
+        stickyShift = Sticky.OFF
         keyboardView.keyboard = qwertyKeyboard
         keyboardView.visibility = View.GONE // start each input session with only the suggestions bar visible
         updateShiftState()
@@ -143,7 +151,15 @@ class RoEnKeyboardService : InputMethodService(), KeyboardView.OnKeyboardActionL
 
     /** Appends an already-cased letter (from either the soft keyboard or a hardware key press) to the current word. */
     private fun handleLetter(ic: android.view.inputmethod.InputConnection, ch: Char) {
-        currentWord.append(ch)
+        var c = ch
+        if (currentWord.isEmpty()) {
+            // Starting a new word: upper-case it if we're at the start of a sentence. Remember that
+            // we did, so a capital letter here isn't mistaken for a deliberately typed proper noun
+            // (which autocorrect leaves alone) when the word is finished.
+            currentWordAutoCapitalized = c.isLowerCase() && shouldCapitalizeNextLetter(ic)
+            if (currentWordAutoCapitalized) c = c.uppercaseChar()
+        }
+        currentWord.append(c)
         ic.setComposingText(currentWord, 1)
         updateCandidates(dictionary.suggest(currentWord.toString()))
     }
@@ -160,8 +176,9 @@ class RoEnKeyboardService : InputMethodService(), KeyboardView.OnKeyboardActionL
                 updateCandidates(dictionary.suggest(currentWord.toString()))
             }
         } else {
-            // Deleting back across a word/hyphen boundary invalidates that tracked context.
-            pendingHyphenPrefix = null
+            // Deleting back across a word/joiner boundary invalidates that tracked context.
+            pendingJoinerPrefix = null
+            pendingJoinerChar = null
             lastCommittedRaw = null
             lastCommittedText = null
             ic.deleteSurroundingText(1, 0)
@@ -171,14 +188,15 @@ class RoEnKeyboardService : InputMethodService(), KeyboardView.OnKeyboardActionL
     private fun handleWordBoundary(ic: android.view.inputmethod.InputConnection, boundary: String, sendEnterAction: Boolean = false) {
         val typedWord = currentWord.toString()
 
-        if (boundary == "-") {
-            // Likely the start of a contraction (v-am, s-a, dintr-un, ...): don't autocorrect the
-            // prefix in isolation - "v", "s", "mi", "dintr" etc aren't real words on their own and
+        if (boundary == "-" || boundary == "'") {
+            // Likely the start of a contraction (v-am, s-a, didn't, ...): don't autocorrect the
+            // prefix in isolation - "v", "s", "mi", "didn" etc aren't real words on their own and
             // would just get mangled - commit it as typed and resolve the whole thing once the
-            // suffix after the hyphen arrives.
+            // suffix after the joiner arrives.
             if (typedWord.isNotEmpty()) {
                 ic.finishComposingText()
-                pendingHyphenPrefix = typedWord
+                pendingJoinerPrefix = typedWord
+                pendingJoinerChar = boundary
             }
             currentWord.clear()
             updateCandidates(emptyList())
@@ -186,18 +204,20 @@ class RoEnKeyboardService : InputMethodService(), KeyboardView.OnKeyboardActionL
             return
         }
 
-        val prefix = pendingHyphenPrefix
-        if (typedWord.isNotEmpty() && prefix != null) {
-            // Finishing a contraction typed with an explicit hyphen: "prefix-typedWord".
-            val exact = dictionary.exactRoMatch("$prefix-$typedWord")
-            val resolved = exact ?: "$prefix-${bestAutocorrection(typedWord)}"
+        val prefix = pendingJoinerPrefix
+        val joiner = pendingJoinerChar
+        if (typedWord.isNotEmpty() && prefix != null && joiner != null) {
+            // Finishing a contraction typed with an explicit hyphen/apostrophe: "prefix<joiner>typedWord".
+            val exact = dictionary.exactMatch("$prefix$joiner$typedWord")
+            val resolved = exact ?: "$prefix$joiner${bestAutocorrection(typedWord)}"
             val cased = matchCase(prefix, resolved)
-            ic.deleteSurroundingText(prefix.length + 1, 0) // remove the already-committed "prefix-"
+            ic.deleteSurroundingText(prefix.length + 1, 0) // remove the already-committed "prefix<joiner>"
             ic.setComposingText(cased, 1)
             ic.finishComposingText()
-            lastCommittedRaw = "$prefix-$typedWord".lowercase()
+            lastCommittedRaw = "$prefix$joiner$typedWord".lowercase()
             lastCommittedText = cased
-            pendingHyphenPrefix = null
+            pendingJoinerPrefix = null
+            pendingJoinerChar = null
         } else if (typedWord.isNotEmpty()) {
             // Normal word boundary, but first check whether merging with the word just committed
             // forms a known contraction typed as two separate words ("v" <space> "am" -> "v-am").
@@ -205,7 +225,7 @@ class RoEnKeyboardService : InputMethodService(), KeyboardView.OnKeyboardActionL
             // likely auto-corrected to "va" on its own, but "v-am" - not "va-am" - is the real word).
             val prevRaw = lastCommittedRaw
             val prevText = lastCommittedText
-            val merged = if (boundary == " " && prevRaw != null) dictionary.exactRoMatch("$prevRaw-$typedWord") else null
+            val merged = if (boundary == " " && prevRaw != null) dictionary.exactMatch("$prevRaw-$typedWord") else null
             if (merged != null && prevText != null) {
                 val cased = matchCase(prevRaw!!, merged)
                 ic.deleteSurroundingText(prevText.length + 1, 0) // remove the previously committed word + the space before this one
@@ -253,28 +273,19 @@ class RoEnKeyboardService : InputMethodService(), KeyboardView.OnKeyboardActionL
     }
 
     /** Chooses the correction to commit for a finished word, preserving original casing. */
-    private fun bestAutocorrection(typed: String): String {
-        if (typed.isEmpty()) return typed
-        val suggestions = dictionary.suggest(typed, maxResults = 1)
-        val top = suggestions.firstOrNull() ?: return typed
+    private fun bestAutocorrection(typed: String): String =
+        dictionary.correct(typed, capitalizationIsAutomatic = currentWordAutoCapitalized)
 
-        // Already correct as typed (distance 0 and same spelling): keep it.
-        if (top.distance == 0 && top.word.equals(typed, ignoreCase = true)) {
-            return matchCase(typed, top.word)
-        }
-        // Only auto-apply a correction we're reasonably confident about.
-        if (top.distance <= 2) {
-            return matchCase(typed, top.word)
-        }
-        return typed
-    }
+    private fun matchCase(original: String, corrected: String): String =
+        dictionary.matchCase(original, corrected)
 
-    private fun matchCase(original: String, corrected: String): String {
-        if (original.isEmpty()) return corrected
-        return if (original[0].isUpperCase()) {
-            corrected.replaceFirstChar { it.uppercaseChar() }
-        } else corrected
-    }
+    /**
+     * True when the cursor sits at the start of a sentence, so the next letter typed should be
+     * upper-cased: at the very start of the field, right after a line break, or after ". ", "! "
+     * or "? ".
+     */
+    private fun shouldCapitalizeNextLetter(ic: android.view.inputmethod.InputConnection): Boolean =
+        TextRules.shouldCapitalize(ic.getTextBeforeCursor(4, 0))
 
     // Maps each visible slot (0=left, 1=center/bold, 2=right) to the index into currentSuggestions
     // it's currently showing, or -1 if the slot is empty. The center slot always shows the actual
@@ -317,14 +328,69 @@ class RoEnKeyboardService : InputMethodService(), KeyboardView.OnKeyboardActionL
         keyboardView.invalidateAllKeys()
     }
 
+    /**
+     * Sticky (one-shot / locked / off) state for the physical keyboard's modifier keys, so Alt,
+     * Sym, Fn and Shift can be tapped instead of held: first tap arms the modifier for the next
+     * key, a second tap locks it until tapped again.
+     */
+    private enum class Sticky { OFF, ONE_SHOT, LOCKED;
+        fun next(): Sticky = when (this) { OFF -> ONE_SHOT; ONE_SHOT -> LOCKED; LOCKED -> OFF }
+    }
+
+    private var stickyAlt = Sticky.OFF
+    private var stickyShift = Sticky.OFF
+
+    private fun isModifierKey(keyCode: Int) = when (keyCode) {
+        KeyEvent.KEYCODE_ALT_LEFT, KeyEvent.KEYCODE_ALT_RIGHT, KeyEvent.KEYCODE_SYM,
+        KeyEvent.KEYCODE_FUNCTION, KeyEvent.KEYCODE_SHIFT_LEFT, KeyEvent.KEYCODE_SHIFT_RIGHT -> true
+        else -> false
+    }
+
+    /** Meta state to resolve the next character with, combining the physical event's own modifiers
+     * with whatever we have latched. */
+    private fun effectiveMetaState(event: KeyEvent): Int {
+        var meta = event.metaState
+        if (stickyAlt != Sticky.OFF) meta = meta or KeyEvent.META_ALT_ON or KeyEvent.META_ALT_LEFT_ON
+        if (stickyShift != Sticky.OFF) meta = meta or KeyEvent.META_SHIFT_ON or KeyEvent.META_SHIFT_LEFT_ON
+        return meta
+    }
+
+    /** Clears any modifier that was only armed for a single keystroke. */
+    private fun consumeOneShotModifiers() {
+        if (stickyAlt == Sticky.ONE_SHOT) stickyAlt = Sticky.OFF
+        if (stickyShift == Sticky.ONE_SHOT) stickyShift = Sticky.OFF
+    }
+
+    override fun onKeyUp(keyCode: Int, event: KeyEvent?): Boolean {
+        // Swallow the release of a modifier we handled on the way down, so the system doesn't also
+        // act on it (and so releasing it doesn't cancel the sticky state we just set).
+        if (isModifierKey(keyCode)) return true
+        return super.onKeyUp(keyCode, event)
+    }
+
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
+        // Tap-to-toggle modifiers: Alt/Sym/Fn and Shift latch instead of needing to be held down.
+        when (keyCode) {
+            KeyEvent.KEYCODE_ALT_LEFT, KeyEvent.KEYCODE_ALT_RIGHT,
+            KeyEvent.KEYCODE_SYM, KeyEvent.KEYCODE_FUNCTION -> {
+                stickyAlt = stickyAlt.next()
+                return true
+            }
+            KeyEvent.KEYCODE_SHIFT_LEFT, KeyEvent.KEYCODE_SHIFT_RIGHT -> {
+                stickyShift = stickyShift.next()
+                return true
+            }
+        }
+
         // Route physical/hardware keyboard presses (e.g. on devices like the Titan Slim)
         // through the same autocorrect pipeline as the on-screen keys.
         val ic = currentInputConnection
         if (ic != null && event != null && event.isPrintingKey &&
             keyCode != KeyEvent.KEYCODE_SPACE && keyCode != KeyEvent.KEYCODE_ENTER
         ) {
-            val unicodeChar = event.unicodeChar
+            val unicodeChar = event.getUnicodeChar(effectiveMetaState(event))
+                .takeIf { it != 0 } ?: event.unicodeChar
+            consumeOneShotModifiers()
             if (unicodeChar != 0 && Character.isLetter(unicodeChar)) {
                 handleLetter(ic, unicodeChar.toChar())
                 return true

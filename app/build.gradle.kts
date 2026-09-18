@@ -11,8 +11,8 @@ android {
         applicationId = "com.andrei.roenkeyboard"
         minSdk = 23
         targetSdk = 34
-        versionCode = 5
-        versionName = "1.0.4"
+        versionCode = 6
+        versionName = "1.1.0"
     }
 
     buildTypes {
@@ -38,10 +38,15 @@ android {
     androidResources {
         // dictionaries are plain text, no compression needed but keep default
     }
+
+    testOptions {
+        unitTests.isReturnDefaultValues = true
+    }
 }
 
 dependencies {
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.appcompat:appcompat:1.7.0")
     implementation("com.google.android.material:material:1.12.0")
+    testImplementation("junit:junit:4.13.2")
 }
