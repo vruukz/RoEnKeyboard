@@ -29,6 +29,9 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v3
 
+      - name: Run autocorrect unit tests
+        run: gradle testDebugUnitTest --no-daemon
+
       - name: Build debug APK
         run: gradle assembleDebug --no-daemon
 
